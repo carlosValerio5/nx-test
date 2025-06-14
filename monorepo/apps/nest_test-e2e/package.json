@@ -1,0 +1,26 @@
+{
+  "name": "@monorepo/nest_test-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "implicitDependencies": [
+      "@monorepo/nest_test"
+    ],
+    "targets": {
+      "e2e": {
+        "executor": "@nx/jest:jest",
+        "outputs": [
+          "{projectRoot}/test-output/jest/coverage"
+        ],
+        "options": {
+          "jestConfig": "apps/nest_test-e2e/jest.config.ts",
+          "passWithNoTests": true
+        },
+        "dependsOn": [
+          "@monorepo/nest_test:build",
+          "@monorepo/nest_test:serve"
+        ]
+      }
+    }
+  }
+}
