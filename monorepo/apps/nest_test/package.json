@@ -39,6 +39,12 @@
             "buildTarget": "@monorepo/nest_test:build:production"
           }
         }
+      },
+      "docker-build": {
+        "dependsOn": [
+          "build"
+        ],
+        "command": "docker build -f apps/nest_test/Dockerfile . -t monorepo-nest_test"
       }
     }
   },
