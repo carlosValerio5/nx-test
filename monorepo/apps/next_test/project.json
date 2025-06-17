@@ -1,0 +1,15 @@
+{
+  "name": "next_test",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/next_test",
+  "targets": {
+    "docker-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker build -f apps/next_test/Dockerfile -t next_test .",
+        "cwd": "."
+      }
+    }
+  }
+}
