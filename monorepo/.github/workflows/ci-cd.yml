@@ -1,0 +1,310 @@
+name: CI/CD pipeline VL
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  NEXTJS_APP_NAME: next_test
+  NESTJS_APP_NAME: nest_test
+
+#Jobs that will run simultaneously
+jobs:
+
+  #setting up change detection per project
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend-changed: ${{ steps.changes.outputs.frontend }}
+      backend-changed: ${{ steps.changes.outputs.backend }}
+      shared-changed: ${{ steps.changes.outputs.shared }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'apps/next_test/**'
+              - 'libs/**'
+              - 'package.json'
+              - 'nx.json'
+              - 'tsconfig.base.json'
+            backend:
+              - 'apps/nest_test/**'
+              - 'libs/**'
+              - 'package.json'
+              - 'nx.json'
+              - 'tsconfig.base.json'
+            shared:
+              - 'libs/**'
+              - 'package.json'
+              - 'nx.json'
+              - 'tsconfig.base.json'
+
+  setup:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+
+    #if any changes are detected it will run
+    if: needs.detect-changes.outputs.frontend-changed == 'true' || needs.detect-changes.outputs.backend-changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Nx cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            .nx/cache
+            node_modules/.cache/nx
+
+          key: ${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json' )}}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json', '**/project.json')}}
+          restore-keys: |
+            ${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json')}}-
+            ${{ runner.os }}-nx-
+
+  #linting
+  lint:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.frontend-changed == 'true' || needs.detect-changes.outputs.backend-changed == 'true'
+    strategy:
+      matrix:
+        app: []
+      steps:
+        - uses: actions/checkout@v4
+
+        - name: Setup Node.js
+          uses: actions/setup-node@v4
+          with:
+            node-version: '18'
+            cache: 'npm'
+
+        - name: Install dependencies
+          run: npm ci
+        - name: Restore Nx cache
+          uses: actions/cache@v3
+          with:
+            path: |
+              .nx/cache
+              node_modules/.cache/nx
+            key: ${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json') }}
+
+        - name: Lint frontend
+          if: needs.detect-changes.outputs.frontend-changed == 'true'
+          run: npx nx lint next_test
+
+        - name: Lint frontend
+          if: needs.detect-changes.outputs.backend-changed == 'true'
+          run: npx nx lint nest_test
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.frontend-changed == 'true' || needs.detect-changes.backend-changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Nx cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            .nx/cache
+            node_modules/.cache/nx
+          key: $${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json') }}
+      - name: Test frontend
+        if: needs.detect-changes.outputs.frontend-changed == 'true'
+        run: npx npx test next_test --watchAll=false --coverage
+
+      - name: Test backend
+        if: needs.detect-changes.outputs.backend-changed == 'true'
+        run: npx nx test nest_test --watchAll=false --coverage
+
+      - name: Upload frontend coverage
+        if: needs.detect-changes.outputs.frontend-changed == 'true'
+        uses: codecov/codecov-actions@v3
+        with:
+          files: ./coverage/apps/frontend/lcov.info
+          flags: frontend
+
+      - name: Upload backend coverage
+        if: needs.detect-changes.backend-changed == 'true'
+        uses: codecov/codecov-actions@v3
+        with:
+          files: ./coverage/apps/backend/lcov.info
+          flags: backend
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, lint, test]
+    if: needs.detect-changes.outputs.frontend-changed == 'true' || needs.detect-changes.outputs.backend-changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Nx cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            .nx/cache
+            node_modules/.cache/nx
+          key: $ {{ runner.os }}-nx-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json') }}
+
+      - name: Build frontend
+        if: needs.detect-changes.outputs.frontend-changed == 'true'
+        run: npx nx build next_test --prod
+
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            dist/
+          key: ${{ runner.os }}-build-${{ github.sha }}
+
+  docker-build-push:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build]
+    if: github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.frontend-changed == 'true' || needs.detect-changes.outputs.backend-changed == 'true')
+    strategy:
+      matrix:
+        include:
+          - app: frontend
+            condition: needs.detect-changes.outputs.frontend-changed == 'true'
+          - app: backend
+            condition: needs.detect-changes.outputs.backend-changed == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if no changes
+        if: matrix.condition != 'true'
+        run: echo "Skipping ${{ matrix.app }} - no changes detected"
+
+      - name: Configure AWS credentials
+        if: matrix.condition == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: matrix-condition == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Restore build artifacts
+        if: matrix-condition == 'true'
+        uses: actions/cache@v3
+        with:
+          path: |
+            dist/
+          key: ${{ runner.os }}-build-${{ github.sha }}
+
+      - name: Build, tag, and push Docker image
+        if: matrix.condition == 'true'
+        env:
+          ECR_REPOSITORY: {{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
+          IMAGE_TAG: {{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f apps/${{ matrix.app }}/Dockerfile .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, docker-build-push]
+    if: github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.frontend-changed == 'true' || needs.detect-changes.backend-changed == 'true')
+    environment: production
+    strategy:
+      matrix:
+        include:
+          - app: frontend
+            condition: needs.detect-changes.outputs.frontend-changed == 'true'
+            service: frontend-service
+            cluster: frontend-cluster
+          - app: backend
+            condition: needs.detect-changes.outputs.backend-changed == 'true'
+            service: backend-service
+            cluster: backend-cluster
+
+    steps:
+      - name: Skip if no changes
+        if: matrix.condition != 'true'
+        run: echo "Skipping deployment for ${{ matrix.app }} - no changes detected"
+
+      - name: Configure AWS credentials
+        if: matrix.condition == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to ECS
+        if: matrix.condition == 'true'
+        env:
+          ECR_REPOSITORY: {{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
+          IMAGE_TAG: {{ github.sha }}
+        run: |
+          # Update ECS service with new image
+          aws ecs update-service \
+            --cluster ${{ matrix.cluster }}
+            --service ${{ matrix.service }}
+            --force-new-deplotment
+
+          # Wait for deployment to complete
+          aws ecs wait services-stable \
+            --cluster ${{ matrix.cluster }} \
+            --services ${{ matrix.service }}
+
+          echo "Deployment completed for ${{ matrix.app }}"
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, deploy]
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+      - name: Notify deployment success
+        if: needs.deploy.result == 'success'
+        run: |
+          echo "Deployment successfull"
+
+      - name: Notify deployment failure
+        if: needs.deploy.result == 'failure'
+        run: |
+          echo "Deployment failed"
