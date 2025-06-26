@@ -1,10 +1,12 @@
-name: CI/CD pipeline VL
-
+name: CI
 on:
   push:
-    branches: [main, dev]
+    branches: 
+      - main
+      - dev
   pull_request:
-    branches: [main]
+    branches: 
+      - main
 
 env:
   AWS_REGION: us-east-1
@@ -87,32 +89,32 @@ jobs:
     strategy:
       matrix:
         app: []
-      steps:
-        - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-        - name: Setup Node.js
-          uses: actions/setup-node@v4
-          with:
-            node-version: '18'
-            cache: 'npm'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
 
-        - name: Install dependencies
-          run: npm ci
-        - name: Restore Nx cache
-          uses: actions/cache@v3
-          with:
-            path: |
-              .nx/cache
-              node_modules/.cache/nx
-            key: ${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json') }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Restore Nx cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            .nx/cache
+            node_modules/.cache/nx
+          key: ${{ runner.os }}-nx-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('nx.json', 'workspace.json', 'angular.json') }}
 
-        - name: Lint frontend
-          if: needs.detect-changes.outputs.frontend-changed == 'true'
-          run: npx nx lint next_test
+      - name: Lint frontend
+        if: needs.detect-changes.outputs.frontend-changed == 'true'
+        run: npx nx lint next_test
 
-        - name: Lint frontend
-          if: needs.detect-changes.outputs.backend-changed == 'true'
-          run: npx nx lint nest_test
+      - name: Lint frontend
+        if: needs.detect-changes.outputs.backend-changed == 'true'
+        run: npx nx lint nest_test
 
   test:
     runs-on: ubuntu-latest
@@ -222,12 +224,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        if: matrix-condition == 'true'
+        if: matrix.condition == 'true'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Restore build artifacts
-        if: matrix-condition == 'true'
+        if: matrix.condition == 'true'
         uses: actions/cache@v3
         with:
           path: |
@@ -237,8 +239,8 @@ jobs:
       - name: Build, tag, and push Docker image
         if: matrix.condition == 'true'
         env:
-          ECR_REPOSITORY: {{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
-          IMAGE_TAG: {{ github.sha }}
+          ECR_REPOSITORY: ${{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f apps/${{ matrix.app }}/Dockerfile .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
@@ -278,8 +280,8 @@ jobs:
       - name: Deploy to ECS
         if: matrix.condition == 'true'
         env:
-          ECR_REPOSITORY: {{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
-          IMAGE_TAG: {{ github.sha }}
+          ECR_REPOSITORY: ${{ matrix.app == 'frontend' && env.NEXTJS_APP_NAME || env.NESTJS_APP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           # Update ECS service with new image
           aws ecs update-service \
